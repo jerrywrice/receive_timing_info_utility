@@ -1,0 +1,63 @@
+I've been running/testing example app 'hardware_check.rs' on Windows, and have the following update:
+
+1. Per Microsoft's documentation, Windows supports a maximum serial port baud rate of 250_000. 'Hardware_check' 
+   currently uses a top baud rate setting of 2_000_000 in dual port mode, which results in a Windows hangup 
+   on the corresponding read_exact() invocation following the write() at this invalid baud rate. I revised my version 
+   of 'hardware_check' to conditionally (for Windows only) to limit its max baud rate to 250_000 - which resolved the issue.
+2. Related to #1, when setting the baud rate, it might be useful (in the next major version?) to return an error or 
+   panic if the specified baud value 'setpoint' is known to be invalid for the target platform.
+3. 'Hardware_check' uses a default flow control port setting of 'SOFTWARE' via function 'fn set_defaults(port: &mut dyn serialport::SerialPort)'.
+   This leads to potential issues when binary data is transmitted, so I changed my version to use 'NONE' as the default flow control.
+4. I also found that when 'Hardware_check' is performed with a connected second com port (Loopback_Port mode), the flow-control 
+   subtest initial write/recv_exact sequence in 'test_dual_ports()' panics/errors due to a data mismatch on its 'recv_exact()' invocation. 
+   This is because an earlier invocation of 'test_single_port()' writes port data, but can't read that data from its attached secondary port 
+   since it has no knowledge/access to the secondary port. I fixed this in my version by clearing the buffers at the start of 'test_dual_ports()'.
+5. 'Hardware_check' currently transfers only the fixed text buffer "Test Message". This data pattern contains only printable ASCII 
+   (Utf-8) u8 values (12 bytes in total) and induces minimal stress on the serial sub-system. I changed 'test_dual_ports()' to use a variable
+   length buffer of internally generated data, and in support of this added a new application commmand line argument "--XfrLen=nnn" which permits 
+   the test operator to specify a size for the 'test_dual_ports()' transfer buffers. The default buffer length is 128. The actual data buffer
+   is automatically populated with a sequence of repeating bytes from 0..255. The caveat tot his is whenever flow control is set to SOFTWARE,
+   the bytes '0x11' and '0x13' (XON and XOFF) are replaced with '0x20' to avoid hanging up the port.
+6. The current 'hardware_check' application performs serial data transfers by first executing a 'write' followed inline from the same thread 
+   with a corresponding port 'recv_exact'. I understand this approach was straightforward, but leaves open the possibility of a run-time 
+   deadlock when using larger transfer buffer sizes. Fortunately on Windows I find that buffers upto 5K or so did not block (on my laptop).
+   I would like to enhance this test (or create a new test) so each distinct port-to-port data transfer executes one or both of its 
+   write/recv_exact methods in separate threads. This approach will allow configurable length transfer buffers with the expectation that 
+   there should never be a application induced deadlock due to a blocking write. Furthermore, if the distinct write/read methods are in 
+   separate threads, it's certainly feasible to have another (separate) monitor thread which uses the calculated transfer duration to detect 
+   if the transfer has in-fact hung or crashed - and then report this as an error message.
+7. When a serial port's flow-control is set to 'SOFTWARE', as in the latter stages of the
+   current 'hardware_check' example, if a 0x13 u8 byte (XOFF) is received on the serial port, the receiving 
+   serial driver internally treats this as a special control code and temporarily disables/suspends any ongoing
+   transmission of serial data. The receiving port's transmit operation is disabled until receipt 
+   of a subsequent 0x11 (XON) byte from the remote end-point. The current 'hardware_check' example 
+   does not in-fact truly test the SOFTWARE flow control settings's correct behavior. Instead it enables it but only 
+   sends non XON/XOFF data bytes. Fully/correctly testing this feature is somewhat complicated, likely involving 
+   paired threads and custom communication between these test threads. Note that SOFTWARE flow control 
+   originated many decades ago with serially attached consoles and remote slave terminals connected to a host computer 
+   (i.e. multi-user timeshared computers), and allows a terminal operator to press their keyboard's CNTL^S 
+   (XOFF) key to pause the attached serial ports transmission of text data, and later press the CNTL^Q (XON) 
+   key to command the host computer to resume sending display data. I understand this 'use case' to be quite rare, and 
+   certainly for contemporary and new software development projects to in-fact have an actual requirement for this. 
+   I suggest we might enhance the documentation with respect to the SOFTWARE flow control settings and clearly state 
+   it should not be used when transferring binary (non-printable) serial data.
+8. Similar to #7, when a serial port's flow-control is set to 'HARDWARE', I'm unaware if 'hardware_check' is designed to
+   or can reasonable attempt to verify it operates as expected??? I guess the fact that transfers are successful might be
+   good enough?
+9. Although 'Hardware_check' sets the serial port parameter 'timeout' value, it doesn't actually test this to assure it
+   functions as expected. I would like to incorporate a timeout setting operational test. This might require prompting 
+   the test operator to unplug the dual connected ports???
+
+
+As of today (Sunday June 11) I'm awaiting delivery of a loop-back connector so I can execute the application in single port
+loopback mode. To this time I've executed it with two serial ports and cables + cross-over.
+
+I'll proceed and collect more notes. I should have additional crate related details to discuss when we meet. After it's 
+decided which testing improvements are appropriate (and how to package them), I'll do so and submit one or more push requests.
+
+Jerry
+
+
+
+     
+
